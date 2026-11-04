@@ -1,0 +1,63 @@
+name: Publish existing release demo
+
+on:
+  push:
+    branches:
+      - publish-demo-release
+    paths:
+      - .github/workflows/publish-demo.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v2.0.0-test.1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'neuromancer/Raze' && github.ref == 'refs/heads/publish-demo-release'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: neuromancer/Raze
+      RELEASE_TAG: v2.0.0-test.1
+    steps:
+      - name: Verify the existing demo assets
+        shell: bash
+        run: |
+          gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == "v2.0.0-test.1")' > before.json
+          jq -e '
+            .tag_name == "v2.0.0-test.1" and
+            .prerelease == true and
+            ([.assets[].name] | sort) == ([
+              "SHA256SUMS",
+              "raze-v2.0.0-test.1-linux-x86_64.tar.gz",
+              "raze-v2.0.0-test.1-macos-arm64.zip",
+              "raze-v2.0.0-test.1-macos-x86_64.zip",
+              "raze-v2.0.0-test.1-windows-x86_64-pdb.7z",
+              "raze-v2.0.0-test.1-windows-x86_64.zip"
+            ] | sort) and
+            all(.assets[]; .size > 0)
+          ' before.json
+
+      - name: Publish the existing draft as a prerelease
+        shell: bash
+        run: |
+          gh release edit "$RELEASE_TAG" \
+            --draft=false --prerelease --latest=false --verify-tag
+
+      - name: Verify publication and preserve all assets
+        shell: bash
+        run: |
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > after.json
+          jq -e --slurpfile before before.json '
+            .tag_name == "v2.0.0-test.1" and
+            .draft == false and .prerelease == true and
+            .id == $before[0].id and
+            ([.assets[] | {id, name, size, digest}] | sort_by(.id)) ==
+            ([$before[0].assets[] | {id, name, size, digest}] | sort_by(.id))
+          ' after.json
+          jq -r '.html_url' after.json | tee -a "$GITHUB_STEP_SUMMARY"
